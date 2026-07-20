@@ -1,5 +1,5 @@
 /* Fracture — offline-first service worker */
-const CACHE_NAME = 'fracture-v2';
+const CACHE_NAME = 'fracture-v3';
 const ASSETS = ['./', './index.html', './manifest.webmanifest', './icon-180.png', './icon-512.png'];
 
 self.addEventListener('install', e => {

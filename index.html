@@ -193,7 +193,7 @@ header .sp{flex:1}
 
 <input type="file" id="fileIn" accept="image/*" hidden>
 <input type="file" id="recipeIn" accept="application/json,.json" hidden>
-<input type="color" id="colorIn" hidden>
+<input type="color" id="colorIn" tabindex="-1" style="position:fixed;left:0;top:0;width:28px;height:28px;opacity:0.01;border:0;padding:0;z-index:-1">
 
 <script>
 'use strict';
@@ -220,7 +220,7 @@ const defGrade=()=>({
 });
 const defFracture=()=>({
   enabled:false,style:'kintsugi',color:COPPER,
-  cells:48,order:1,focus:55,
+  cells:48,order:1,focus:55,reach:100,
   width:18,sep:12,rot:1.5,drift:6,depth:20,slip:0,glint:35,
   seed:8241,epi:[0.5,0.45]
 });
@@ -267,6 +267,7 @@ const PARAMS={
   cells:{label:'SHARDS',min:3,max:400,def:48,step:1,fmt:fmtU,...f('cells',true)},
   order:{label:'ORDER (LLOYD)',min:0,max:3,def:1,step:1,fmt:fmtU,...f('order',true)},
   focus:{label:'FOCAL PULL',min:0,max:100,def:55,step:1,fmt:fmtU,...f('focus',true)},
+  reach:{label:'REACH',min:10,max:100,def:100,step:1,fmt:v=>Math.round(v)>=100?'ALL':String(Math.round(v)),...f('reach')},
   width:{label:'SEAM WIDTH',min:0,max:100,def:18,step:1,fmt:fmtU,...f('width')},
   sep:{label:'SEPARATION',min:0,max:100,def:12,step:1,fmt:fmtU,...f('sep')},
   rot:{label:'ROTATION',min:0,max:15,def:1.5,step:0.1,fmt:v=>v.toFixed(1)+'°',...f('rot')},
@@ -400,32 +401,34 @@ void main(){
 
 const VS_SHARD=`
 attribute vec2 a_pos; attribute vec2 a_cen; attribute vec3 a_rnd; attribute float a_fac;
-uniform float u_A,u_flip,u_sep,u_rot,u_drift,u_slip,u_shrink,u_depth,u_settle;
+uniform float u_A,u_flip,u_sep,u_rot,u_drift,u_slip,u_shrink,u_depth,u_settle,u_reach;
 uniform vec2 u_epi;
-varying vec2 v_uv; varying float v_dep; varying float v_fac;
+varying vec2 v_uv; varying float v_dep; varying float v_fac; varying float v_m;
 void main(){
-  vec2 p=a_pos-a_cen;
-  float ang=(a_rnd.x*2.0-1.0)*u_rot;
-  float s=sin(ang),c=cos(ang);
-  p=vec2(p.x*c-p.y*s,p.x*s+p.y*c);
-  p*=(1.0-u_shrink);
   vec2 d=a_cen-u_epi;
   float dl=max(length(d),1e-4);
+  float m=1.0-smoothstep(u_reach*0.6,u_reach,dl);
+  vec2 p=a_pos-a_cen;
+  float ang=(a_rnd.x*2.0-1.0)*u_rot*m;
+  float s=sin(ang),c=cos(ang);
+  p=vec2(p.x*c-p.y*s,p.x*s+p.y*c);
+  p*=(1.0-u_shrink*m);
   vec2 dir=d/dl;
   vec2 tang=vec2(-dir.y,dir.x);
   vec2 off=dir*u_sep*(0.4+0.6*a_rnd.y)
           +tang*u_slip*(a_rnd.z*2.0-1.0)
           +(vec2(a_rnd.y,a_rnd.z)*2.0-1.0)*u_drift;
-  vec2 q=a_cen+p+off*u_settle;
+  vec2 q=a_cen+p+off*u_settle*m;
   v_uv=vec2(a_pos.x/u_A,a_pos.y);
-  v_dep=(a_rnd.x*2.0-1.0)*u_depth;
+  v_dep=(a_rnd.x*2.0-1.0)*u_depth*m;
   v_fac=a_fac;
+  v_m=m;
   gl_Position=vec4(q.x/u_A*2.0-1.0,(q.y*2.0-1.0)*u_flip,0.0,1.0);
 }`;
 
 const FS_SHARD=`
 precision highp float;
-varying vec2 v_uv; varying float v_dep; varying float v_fac;
+varying vec2 v_uv; varying float v_dep; varying float v_fac; varying float v_m;
 uniform sampler2D u_tex;
 void main(){
   vec3 c=texture2D(u_tex,v_uv).rgb*(1.0+v_dep);
@@ -434,10 +437,10 @@ void main(){
 
 const FS_LINE=`
 precision highp float;
-varying vec2 v_uv; varying float v_dep; varying float v_fac;
+varying vec2 v_uv; varying float v_dep; varying float v_fac; varying float v_m;
 uniform vec3 u_col; uniform float u_base,u_glint;
 void main(){
-  float i=u_base+u_glint*v_fac;
+  float i=(u_base+u_glint*v_fac)*v_m;
   gl_FragColor=vec4(u_col*i,1.0);
 }`;
 
@@ -712,6 +715,7 @@ function setShardUniforms(p,A,flip,full){
   gl.uniform1f(U(p,'u_shrink'),hairline?0:F.width/100*0.05);
   gl.uniform1f(U(p,'u_depth'),F.depth/100*0.12);
   gl.uniform1f(U(p,'u_settle'),settle);
+  gl.uniform1f(U(p,'u_reach'),F.reach>=100?50.0:Math.max(0.02,F.reach/100)*Math.hypot(A,1));
   gl.uniform2f(U(p,'u_epi'),clamp(F.epi[0],0,1)*A,clamp(F.epi[1],0,1));
 }
 function drawFracturePass(gradedTex,A,flip){
@@ -1067,7 +1071,7 @@ const GRADE_CHIPS=[
   ['grainAmt','grain','gap'],['grainSize','size'],
 ];
 const FRACTURE_CHIPS=[
-  ['cells','shards'],['focus','focal'],['order','order'],
+  ['cells','shards'],['focus','focal'],['reach','reach'],['order','order'],
   ['width','width','gap'],['sep','separation'],['rot','rotation'],['drift','drift'],['depth','depth'],['slip','slip'],['glint','glint'],
 ];
 let activeChip=null;
@@ -1147,6 +1151,9 @@ function buildChips(){
   });
   const custom=chip('custom…','mod',()=>{
     const ci=$('#colorIn');ci.value=state.fracture.color;
+    const r=custom.getBoundingClientRect();
+    ci.style.left=Math.max(4,r.left)+'px';ci.style.top=Math.max(4,r.top-34)+'px';
+    ci.oninput=()=>{state.fracture.color=ci.value;syncColorChips();requestRender()};
     ci.onchange=()=>{state.fracture.color=ci.value;syncColorChips();requestRender();history.push()};
     ci.click();
   });
